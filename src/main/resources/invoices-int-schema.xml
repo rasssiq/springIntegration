@@ -1,0 +1,69 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<beans xmlns='http://www.springframework.org/schema/beans'
+	xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance'
+	xmlns:int='http://www.springframework.org/schema/integration'
+	xsi:schemaLocation='http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd http://www.springframework.org/schema/integration http://www.springframework.org/schema/integration/spring-integration.xsd'>
+
+<!-- custom y ktore moga powodowac bledy: all auto-startup="false" -->
+
+	<!-- intercept and log every message -->
+	<int:logging-channel-adapter  id='logger'
+		level='DEBUG' />
+	<int:wire-tap channel='logger' />
+
+	<int:gateway id='invoicesGateway'
+		service-interface='codegeeks.koks.invoices.InvoiceCollectorGateway'>
+		<int:method name='collectInvoices'
+			request-channel='newInvoicesChannel' />
+	</int:gateway>
+	<int:splitter  input-channel='newInvoicesChannel'
+		output-channel='singleInvoicesChannel' />
+	<int:channel id='singleInvoicesChannel' />
+
+	<int:filter  input-channel='singleInvoicesChannel'
+		output-channel='filteredInvoicesChannel' ref='invoiceFilter' />
+	<int:channel id='filteredInvoicesChannel' />
+<!-- customy channel to wrzuce ktory bedzie zmienial wartosc pola wartosc na "polska pany" gdy kraj="polska -->
+<int:filter input-channel='filteredInvoicesChannel' ref='polskaKlasa'
+	output-channel='polskiChannel'/>
+	<int:channel id='polskiChannel'/>
+
+<!-- <int:recipient-list-router innput-channel='filteredInvoicesChannel'> -->
+	
+<!-- </int:recipient-list-router> -->
+
+
+	<!-- 4. podzial (routowanie) na dwa tunele- jeden dla faktur zagranicznych 
+		a drugi dla przedgranicznych :D -->
+	<int:recipient-list-router 
+		input-channel='polskiChannel'>
+		<int:recipient channel='foreginTransactions'
+			selector-expression='payload.foreign' />
+		<int:recipient channel='localTransactions'
+			selector-expression='!payload.foreign' />
+	</int:recipient-list-router>
+
+	<int:channel id='foreginTransactions'  />
+	<int:channel id='localTransactions' />
+	<!-- 5. transformersy :D -->
+	<int:transformer  input-channel='localTransactions'
+		output-channel='bankingChannel' ref='localPaymentCreator' />
+
+	<int:transformer  input-channel='foreginTransactions'
+		output-channel='bankingChannel' ref='foreginPaymentCreator' />
+	<int:channel id='bankingChannel'>
+		<int:queue capacity='10000' />
+	</int:channel>
+	<!-- service aktywator i failedPaymentChannel -->
+	<int:service-activator 
+		input-channel='bankingChannel' ref='paymentProcessor'>
+		<int:poller fixed-rate='500'
+			error-channel='failedPaymentChannel' />
+	</int:service-activator>
+
+	<int:channel id='failedPaymentChannel' />
+
+	<int:service-activator 
+		input-channel="failedPaymentChannel" ref='failedPaymentHandler' />
+
+</beans>
